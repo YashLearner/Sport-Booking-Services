@@ -3,6 +3,7 @@ import Booking from "../models/Booking.js";
 import Court from "../models/Court.js";
 import { convertTimeToMinutes } from "../utils/timeUtils.js";
 import { createAuditLog } from "../utils/createAuditlog.js";
+import { createNotification } from "../utils/createNotification.js";
 
 export const createBookingService = async (data) => {
     const { userId, courtId, bookingDate, startTime, endTime } = data;
@@ -68,18 +69,7 @@ export const createBookingService = async (data) => {
             { session }
         );
 
-        await createNotification({
 
-            user: userId,
-
-            title: "Booking Confirmed",
-
-            message:
-                "Your court booking has been confirmed.",
-
-            type: "Booking"
-
-        });
 
         const createdBooking = booking[0];
         const updatedUser = await User.findOneAndUpdate(
@@ -111,6 +101,17 @@ export const createBookingService = async (data) => {
             resourceId: createdBooking._id,
             description: "Court booking created",
             session
+        });
+
+        // Notification created
+
+        await createNotification({
+
+            user: userId,
+            title: "Booking Confirmed",
+            message:"Your court booking has been confirmed.",
+            type: "Booking"
+
         });
 
         await session.commitTransaction();
@@ -163,24 +164,12 @@ export const cancelBookingService = async (bookingId, userId) => {
 
         booking.status = "Cancelled";
 
-        await createNotification({
-
-            user: userId,
-
-            title: "Booking Cancelled",
-
-            message:
-                "Your booking has been cancelled.",
-
-            type: "Booking"
-
-        });
-
+        
         await booking.save({ session })
 
         const updatedUser = await User.findOneAndUpdate(
 
-            
+
             { _id: userId },
             { $inc: { credits: 1 } }, { new: true, session }
 
@@ -219,6 +208,20 @@ export const cancelBookingService = async (bookingId, userId) => {
             description: "Court Booking Cancelled",
             session
         });
+
+        await createNotification({
+
+            user: userId,
+
+            title: "Booking Cancelled",
+
+            message:
+                "Your booking has been cancelled.",
+
+            type: "Booking"
+
+        });
+
 
         await session.commitTransaction();
 
@@ -290,7 +293,7 @@ export const createRecurringBookingService = async (data) => {
                 status: "Booked"
             }).session(session);
 
-            if (existingBooking) {
+            if (existingBookings) {
                 throw new Error(
                     `Court already booked on ${bookingDate.toDateString()}`
                 );

@@ -7,6 +7,7 @@ import { authMiddleware } from "./middleware/authMiddleware.js";
 import courtRoutes from "./routes/courtRoutes.js";
 import bookingRoutes from "./routes/bookingRoutes.js";
 import waitlistRoute from "./routes/waitlistRoutes.js"
+import notificationRoute from "./routes/notificationRoute.js"
 
 import errorMiddleware from "./middleware/errorMiddleware.js";
 
@@ -29,9 +30,11 @@ app.use("/api/courts", courtRoutes);
 // Booking Route
 app.use("/api/bookings", bookingRoutes);
 
-
+// WaitList Route
 app.use("/api/waitlist", waitlistRoute);
 
+// Notification Route
+app.use("/api/notification" ,notificationRoute)
 
 // error Middleware
 app.use(errorMiddleware);
