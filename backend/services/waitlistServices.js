@@ -70,7 +70,107 @@ export const getOldestWaitingUser = async (
         endTime,
         status: "Waiting"
     })
-    .sort({ createdAt: 1 })
-    .session(session);
+        .sort({ createdAt: 1 })
+        .session(session);
 
 };
+
+
+export const promoteWaitingUser = async (booking, session) => {
+
+    const waitingUser = await getOldestWaitingUser(
+        booking.court,
+        booking.bookingDate,
+        booking.startTime,
+        booking.endTime,
+        session
+    );
+    if (!waitingUser) {
+        return;
+    }
+
+    const user = await user.findById(waitingUser.user).session(session)
+
+
+    if (!user || user.credits <= 0) {
+        return;
+    }
+
+    const court = await Court.findById(booking.court).session(session);
+
+    const requestedStart = convertTimeToMinutes(booking.startTime);
+
+    const requestedEnd = convertTimeToMinutes(booking.endTime);
+
+    const duration = (requestedEnd - requestedStart) / 60;
+
+    const totalPrice = duration * court.pricePerHour;
+
+    const newBooking = await Booking.create(
+        [{
+            user: waitingUser.user,
+            court: booking.court,
+            bookingDate: booking.bookingDate,
+            startTime: booking.startTime,
+            endTime: booking.endTime,
+            duration,
+            totalPrice
+        }],
+        { session }
+    );
+
+    const createdBooking = newBooking[0];
+
+    const updatedUser = await User.findByIdAndUpdate(
+    waitingUser.user,
+    {
+        $inc: {
+            credits: -1
+        }
+    },
+    {
+        new: true,
+        session
+    }
+);
+
+await CreditLedger.create(
+    [{
+        user: waitingUser.user,
+        booking: createdBooking._id,
+        type: "Debit",
+        amount: 1,
+        balanceAfter: updatedUser.credits,
+        description: "Booking promoted from waitlist"
+    }],
+    { session }
+);
+
+await createAuditLog({
+    user: waitingUser.user,
+    action: "WAITLIST_PROMOTED",
+    resource: "Booking",
+    resourceId: createdBooking._id,
+    description: "Booking promoted from waitlist",
+    session
+});
+
+await Notification.create(
+    [{
+        user: waitingUser.user,
+        title: "Booking Confirmed",
+        message: "Your waitlisted booking has been confirmed."
+    }],
+    { session }
+);
+
+await Waitlist.findByIdAndUpdate(
+    waitingUser._id,
+    {
+        status: "Promoted"
+    },
+    {
+        session
+    }
+);
+}

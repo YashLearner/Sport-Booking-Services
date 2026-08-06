@@ -2,8 +2,11 @@ import mongoose from "mongoose";
 import Booking from "../models/Booking.js";
 import Court from "../models/Court.js";
 import { convertTimeToMinutes } from "../utils/timeUtils.js";
-import { createAuditLog } from "../utils/createAuditlog.js";
+import { createAuditLog } from "../utils/createAuditLog.js";
 import { createNotification } from "../utils/createNotification.js";
+import User from "../models/User.js";
+import CreditLedger from "../models/CreditLedger.js";
+import { promoteWaitingUser } from "./waitlistServices.js";
 
 export const createBookingService = async (data) => {
     const { userId, courtId, bookingDate, startTime, endTime } = data;
@@ -109,7 +112,7 @@ export const createBookingService = async (data) => {
 
             user: userId,
             title: "Booking Confirmed",
-            message:"Your court booking has been confirmed.",
+            message: "Your court booking has been confirmed.",
             type: "Booking"
 
         });
@@ -164,7 +167,7 @@ export const cancelBookingService = async (bookingId, userId) => {
 
         booking.status = "Cancelled";
 
-        
+
         await booking.save({ session })
 
         const updatedUser = await User.findOneAndUpdate(
@@ -175,19 +178,9 @@ export const cancelBookingService = async (bookingId, userId) => {
 
         );
 
-        const waitingUser = await getOldestWaitingUser(
-            booking.court,
-            booking.bookingDate,
-            booking.startTime,
-            booking.endTime,
-            session
-        );
+        await promoteWaitingUser(booking, session);
 
-        if (waitingUser) {
 
-            console.log(waitingUser);
-
-        }
         await CreditLedger.create(
             [{
                 user: userId,
@@ -257,6 +250,22 @@ export const createRecurringBookingService = async (data) => {
 
     try {
 
+
+        if (!Number.isInteger(weeks) || weeks <= 0 || weeks > 52) {
+            throw new Error("Weeks must be between 1 and 52");
+        }
+
+
+        const user = await User.findById(userId).session(session);
+        if (!user) {
+            throw new Error("User not found");
+        }
+
+        if (user.credits < weeks) {
+            throw new Error(
+                `You need ${weeks} credits but only have ${user.credits}`
+            );
+        }
         const court = await Court.findById(courtId).session(session);
 
         if (!court) {
@@ -284,20 +293,15 @@ export const createRecurringBookingService = async (data) => {
                 bookingDate.getDate() + (i * 7)
             );
 
+            bookingDate.setHours(0, 0, 0, 0);
             // Slot Check
 
-            const existingBookings = await Booking.findOne({
+            const existingBookings = await Booking.find({
                 court: courtId,
                 bookingDate,
-
                 status: "Booked"
             }).session(session);
 
-            if (existingBookings) {
-                throw new Error(
-                    `Court already booked on ${bookingDate.toDateString()}`
-                );
-            }
 
             const requestedStart = convertTimeToMinutes(startTime);
             const requestedEnd = convertTimeToMinutes(endTime);
@@ -329,6 +333,49 @@ export const createRecurringBookingService = async (data) => {
             );
 
             bookings.push(booking[0]);
+
+            // Credit Deduct
+            const updatedUser = await User.findByIdAndUpdate(
+                userId,
+                {
+                    $inc: {
+                        credits: -weeks
+                    }
+                },
+                {
+                    new: true,
+                    session
+                }
+            );
+            await CreditLedger.create(
+                [{
+                    user: userId,
+                    booking: createdBooking._id,
+                    type: "Debit",
+                    amount: 1,
+                    balanceAfter: updatedUser.credits,
+                    description: "Recurring Booking"
+                }],
+                { session }
+            )
+
+            await createAuditLog({
+                user: userId,
+                action: "RECURRING_BOOKING_CREATED",
+                resource: "Booking",
+                resourceId: createdBooking._id,
+                description: "Recurring booking created",
+                session
+            });
+
+            await Notification.create(
+                [{
+                    user: userId,
+                    title: "Recurring Booking Created",
+                    message: `Your recurring booking for ${weeks} weeks has been created.`
+                }],
+                { session }
+            );
         }
 
         await session.commitTransaction();
