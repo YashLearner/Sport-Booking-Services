@@ -15,7 +15,7 @@ const creditLedgerSchema = new mongoose.Schema(
 
     type: {
       type: String,
-      enum: ["Credit", "Debit", "Refund"],
+      enum: ["INITIAL_BALANCE", "BOOKING_PAYMENT", "BOOKING_REFUND", "Credit", "Debit", "Refund"],
       required: true,
     },
 

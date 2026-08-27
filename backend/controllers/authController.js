@@ -1,5 +1,6 @@
 import bcrypt from "bcrypt";
 import User from "../models/User.js";
+import CreditLedger from "../models/CreditLedger.js";
 import jwt from "jsonwebtoken";
 
 export const register = async (req, res) => {
@@ -19,11 +20,21 @@ export const register = async (req, res) => {
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Create user
+    // Create user with initial wallet balance of $100.00
     const user = await User.create({
       name,
       email,
       password: hashedPassword,
+      walletBalance: 100.0,
+    });
+
+    // Create Initial Balance Ledger record
+    await CreditLedger.create({
+      user: user._id,
+      type: "INITIAL_BALANCE",
+      amount: 100.0,
+      balanceAfter: 100.0,
+      description: "Initial Sign-Up Wallet Bonus",
     });
 
     res.status(201).json({
@@ -33,7 +44,8 @@ export const register = async (req, res) => {
         id: user._id,
         name: user.name,
         email: user.email,
-        credits: user.credits,
+        walletBalance: user.walletBalance,
+        credits: user.walletBalance,
       },
     });
   } catch (error) {
@@ -68,6 +80,12 @@ export const login = async (req, res) => {
       });
     }
 
+    // Ensure walletBalance exists on user document in MongoDB
+    if (user.walletBalance === undefined || user.walletBalance === null) {
+      user.walletBalance = 100.0;
+      await user.save();
+    }
+
     // Generate Token
     const token = jwt.sign(
       {
@@ -89,7 +107,8 @@ export const login = async (req, res) => {
         name: user.name,
         email: user.email,
         role: user.role,
-        credits: user.credits,
+        walletBalance: user.walletBalance,
+        credits: user.walletBalance,
       },
     });
   } catch (error) {

@@ -1,9 +1,13 @@
 import Waitlist from "../models/Waitlist.js";
 import Court from "../models/Court.js";
+import User from "../models/User.js";
+import Booking from "../models/Booking.js";
 import { createAuditLog } from "../utils/createAuditLog.js";
+import CreditLedger from "../models/CreditLedger.js";
+import Notification from "../models/Notification.js";
+import { convertTimeToMinutes } from "../utils/timeUtils.js";
 
 export const joinWaitlistService = async (data) => {
-
     const {
         userId,
         courtId,
@@ -54,7 +58,6 @@ export const joinWaitlistService = async (data) => {
     return waitlist;
 };
 
-
 export const getOldestWaitingUser = async (
     courtId,
     bookingDate,
@@ -62,7 +65,6 @@ export const getOldestWaitingUser = async (
     endTime,
     session
 ) => {
-
     return await Waitlist.findOne({
         court: courtId,
         bookingDate,
@@ -72,12 +74,9 @@ export const getOldestWaitingUser = async (
     })
         .sort({ createdAt: 1 })
         .session(session);
-
 };
 
-
 export const promoteWaitingUser = async (booking, session) => {
-
     const waitingUser = await getOldestWaitingUser(
         booking.court,
         booking.bookingDate,
@@ -89,22 +88,21 @@ export const promoteWaitingUser = async (booking, session) => {
         return;
     }
 
-    const user = await user.findById(waitingUser.user).session(session)
+    const user = await User.findById(waitingUser.user).session(session);
+    const court = await Court.findById(booking.court).session(session);
 
-
-    if (!user || user.credits <= 0) {
+    if (!user || !court) {
         return;
     }
 
-    const court = await Court.findById(booking.court).session(session);
-
     const requestedStart = convertTimeToMinutes(booking.startTime);
-
     const requestedEnd = convertTimeToMinutes(booking.endTime);
-
     const duration = (requestedEnd - requestedStart) / 60;
-
     const totalPrice = duration * court.pricePerHour;
+
+    if ((user.walletBalance ?? 0) < totalPrice) {
+        return;
+    }
 
     const newBooking = await Booking.create(
         [{
@@ -121,56 +119,49 @@ export const promoteWaitingUser = async (booking, session) => {
 
     const createdBooking = newBooking[0];
 
-    const updatedUser = await User.findByIdAndUpdate(
-    waitingUser.user,
-    {
-        $inc: {
-            credits: -1
-        }
-    },
-    {
-        new: true,
-        session
+    const updatedUser = await User.findOneAndUpdate(
+        { _id: waitingUser.user, walletBalance: { $gte: totalPrice } },
+        { $inc: { walletBalance: -totalPrice } },
+        { new: true, session }
+    );
+
+    if (!updatedUser) {
+        return;
     }
-);
 
-await CreditLedger.create(
-    [{
+    await CreditLedger.create(
+        [{
+            user: waitingUser.user,
+            booking: createdBooking._id,
+            type: "BOOKING_PAYMENT",
+            amount: totalPrice,
+            balanceAfter: updatedUser.walletBalance,
+            description: "Booking promoted from waitlist"
+        }],
+        { session }
+    );
+
+    await createAuditLog({
         user: waitingUser.user,
-        booking: createdBooking._id,
-        type: "Debit",
-        amount: 1,
-        balanceAfter: updatedUser.credits,
-        description: "Booking promoted from waitlist"
-    }],
-    { session }
-);
-
-await createAuditLog({
-    user: waitingUser.user,
-    action: "WAITLIST_PROMOTED",
-    resource: "Booking",
-    resourceId: createdBooking._id,
-    description: "Booking promoted from waitlist",
-    session
-});
-
-await Notification.create(
-    [{
-        user: waitingUser.user,
-        title: "Booking Confirmed",
-        message: "Your waitlisted booking has been confirmed."
-    }],
-    { session }
-);
-
-await Waitlist.findByIdAndUpdate(
-    waitingUser._id,
-    {
-        status: "Promoted"
-    },
-    {
+        action: "WAITLIST_PROMOTED",
+        resource: "Booking",
+        resourceId: createdBooking._id,
+        description: `Booking promoted from waitlist ($${totalPrice.toFixed(2)})`,
         session
-    }
-);
-}
+    });
+
+    await Notification.create(
+        [{
+            user: waitingUser.user,
+            title: "Booking Confirmed",
+            message: `Your waitlisted booking for ${court.name} ($${totalPrice.toFixed(2)}) has been confirmed.`
+        }],
+        { session }
+    );
+
+    await Waitlist.findByIdAndUpdate(
+        waitingUser._id,
+        { status: "Promoted" },
+        { session }
+    );
+};

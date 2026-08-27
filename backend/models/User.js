@@ -24,9 +24,9 @@ const userSchema = new mongoose.Schema(
       enum: ["user", "admin"],
       default: "user",
     },
-    credits: {
+    walletBalance: {
       type: Number,
-      default: 20,
+      default: 100.0,
       min: 0,
     },
   },
@@ -34,6 +34,14 @@ const userSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
+
+// Virtual getter for backward compatibility if any legacy query reads credits
+userSchema.virtual("credits").get(function () {
+  return this.walletBalance;
+});
+
+userSchema.set("toJSON", { virtuals: true });
+userSchema.set("toObject", { virtuals: true });
 
 const User = mongoose.model("User", userSchema);
 

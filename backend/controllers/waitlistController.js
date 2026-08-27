@@ -15,3 +15,6 @@ export const joinWaitlist = asyncHandler(async (req, res) => {
     });
 
 });
+export const getMyWaitingList = asyncHandler(async(req, res) =>{
+    
+})
